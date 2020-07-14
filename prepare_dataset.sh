@@ -1,0 +1,1 @@
+python3 dataset/align_dataset_images.py --input_folder=/home/igor/datasets/faces6k/data/images --output_folder=/home/igor/datasets/faces6k/aligned --target_image_size=64 --eye_level=0.35 --eye_dist=0.4

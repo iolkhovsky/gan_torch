@@ -8,7 +8,7 @@ DEFAULT_KPREGRESSOR_PATH = "/home/igor/github/my/GAN_faces/configs/shape_predict
 
 class FaceAligner:
 
-    def __init__(self, kpregressor=DEFAULT_KPREGRESSOR_PATH, target_size=100, eye_level=0.3, eye_dist=0.4):
+    def __init__(self, target_size=100, eye_level=0.3, eye_dist=0.4, kpregressor=DEFAULT_KPREGRESSOR_PATH, ):
         self.kepoint_regressor_path = kpregressor
         self.regressor = dlib.shape_predictor(self.kepoint_regressor_path)
         self.detector = dlib.get_frontal_face_detector()
@@ -55,10 +55,10 @@ class FaceAligner:
         eye_l = int(eye_l[0] / len(self.left_eye_ids)), int(eye_l[1] / len(self.left_eye_ids))
         eye_r = int(eye_r[0] / len(self.right_eye_ids)), int(eye_r[1] / len(self.right_eye_ids))
         center = int((eye_l[0] + eye_r[0]) / 2), int((eye_l[1] + eye_r[1]) / 2)
-        eye_distance = self.distance_between_points(eye_l, eye_r)
+        eye_distance = self.__distance_between_points(eye_l, eye_r)
 
-        buf_sz_x, buf_offset_x = self.make_center(current=center[0] / image.shape[1], target=0.5)
-        buf_sz_y, buf_offset_y = self.make_center(current=center[1] / image.shape[0], target=self.eye_level)
+        buf_sz_x, buf_offset_x = self.__make_center(current=center[0] / image.shape[1], target=0.5)
+        buf_sz_y, buf_offset_y = self.__make_center(current=center[1] / image.shape[0], target=self.eye_level)
 
         buf_sz_x = int(buf_sz_x * image.shape[1])
         buf_sz_y = int(buf_sz_y * image.shape[0])
