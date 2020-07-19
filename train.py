@@ -15,7 +15,7 @@ from dataset.faces_dataset import FacesDataset, DEFAULT_RGB_MEAN, DEFAULT_RGB_ST
 from utils import get_readable_timestamp
 
 
-def train(generator, discriminator, train_loader, optimizer, epoch_id=0, scheduler=None, device="cpu",
+def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr, epoch_id=0, scheduler=None, device="cpu",
           autosave_period=None, valid_period=None, tb_writer=None):
 
     generator.train()
@@ -25,33 +25,60 @@ def train(generator, discriminator, train_loader, optimizer, epoch_id=0, schedul
               desc=f'Epoch {epoch_id + 1}',
               unit='image') as pbar:
         for batch_idx, real_imgs in enumerate(train_loader):
+
+            optimizer_discr.zero_grad()
             real_imgs = real_imgs.to(device)
-            random_descriptors = torch.rand(len(real_imgs), 64).to(device)
-            artif_imgs = generator.forward(random_descriptors)
-            inputs = torch.cat((real_imgs, artif_imgs), 0)
-            labels = torch.Tensor(len(real_imgs) * [1] + len(real_imgs) * [0]).to(device)
-            one_hot = torch.Tensor(len(real_imgs) * [[0, 1]] + len(real_imgs) * [[1, 0]]).to(device)
-            optimizer.zero_grad()
-            output = discriminator(inputs)
+            b_size = real_imgs.size(0)
+            label = torch.full((b_size,), 1, device=device)
+            output = discriminator(real_imgs)
+            output = output[:, 1]
             loss_function = BCELoss(reduction="mean")
-            train_loss = loss_function(output, one_hot)
-            train_loss.backward()
-            optimizer.step()
+            errD_real = loss_function(output, label)
+            errD_real.backward()
+            D_x = output.mean().item()
+
+            random_descriptors = torch.randn(b_size, 64, device=device)
+            # Generate fake image batch with G
+            fake = generator(random_descriptors)
+            label.fill_(0)
+            # Classify all fake batch with D
+            output = discriminator(fake.detach())
+            output = output[:, 1]
+            # Calculate D's loss on the all-fake batch
+            errD_fake = loss_function(output, label)
+            # Calculate the gradients for this batch
+            errD_fake.backward()
+            D_G_z1 = output.mean().item()
+            # Add the gradients from the all-real and all-fake batches
+            errD = errD_real + errD_fake
+            # Update D
+            optimizer_discr.step()
+
+            generator.zero_grad()
+            label.fill_(1)  # fake labels are real for generator cost
+            # Since we just updated D, perform another forward pass of all-fake batch through D
+            output = discriminator(fake)
+            output = output[:, 1]
+            # Calculate G's loss based on this output
+            errG = loss_function(output, label)
+            # Calculate gradients for G
+            errG.backward()
+            D_G_z2 = output.mean().item()
+            # Update G
+            optimizer_gen.step()
 
             global_step = epoch_id * len(train_loader) + batch_idx
             if tb_writer:
-                tb_writer.add_scalar("Loss/Train", train_loss.item(), global_step)
+                tb_writer.add_scalar("Loss/Discriminator", errD.item(), global_step)
+                tb_writer.add_scalar("Loss/DiscriminatorFake", errD_fake.item(), global_step)
+                tb_writer.add_scalar("Loss/DiscriminatorReal", errD_real.item(), global_step)
+                tb_writer.add_scalar("Loss/Generator", errG.item(), global_step)
 
             if valid_period:
                 if (batch_idx + 1) % valid_period == 0:
-                    pred = output.argmax(dim=1, keepdim=True)
-                    disc_acc = accuracy(pred, labels)
-                    if tb_writer:
-                        tb_writer.add_scalar("Accuracy/Train", disc_acc, global_step)
-
                     with torch.no_grad():
                         gen_imgs = []
-                        for i, img in enumerate(artif_imgs):
+                        for i, img in enumerate(fake):
                             if img.device != "cpu":
                                 img = img.cpu()
                             img = decode_img(img.detach().numpy())
@@ -85,7 +112,7 @@ def parse_args():
                         help="Size of batch for training")
     parser.add_argument("--device", type=str, default="cpu",
                         help="Target device: cpu/cuda")
-    parser.add_argument("--learning-rate", type=float, default=1e-4,
+    parser.add_argument("--learning-rate", type=float, default=2e-4,
                         help="Learning rate")
     parser.add_argument("--optimizer", type=str, default="adam",
                         help="Type of optmizer")
@@ -126,25 +153,30 @@ def main():
                            mean=DEFAULT_RGB_MEAN, std=DEFAULT_RGB_STD)
     train_dloader = make_dataloader(dataset, batch_size=args.batch_train, shuffle_dataset=True)
 
-    params = list(generator.parameters()) + list(discriminator.parameters())
-    optimizer = None
+    optimizer_gen = None
     if args.optimizer == "adam":
-        optimizer = Adam(params, lr=args.learning_rate,
+        optimizer_gen = Adam(generator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999),
                          weight_decay=args.l2)
     elif args.optimizer == "sgd":
-        optimizer = SGD(params, lr=args.learning_rate,
+        optimizer_gen = SGD(generator.parameters(), lr=args.learning_rate,
+                        weight_decay=args.l2)
+
+    optimizer_discr = None
+    if args.optimizer == "adam":
+        optimizer_discr = Adam(discriminator.parameters(), lr=args.learning_rate, betas=(0.5, 0.999),
+                         weight_decay=args.l2)
+    elif args.optimizer == "sgd":
+        optimizer_discr = SGD(discriminator.parameters(), lr=args.learning_rate,
                         weight_decay=args.l2)
 
     scheduler = None
-    if args.scheduler:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
     tboard_writer = SummaryWriter()
 
     try:
         for e in range(args.epochs):
-            train(generator, discriminator, train_dloader, optimizer, e, scheduler=scheduler, device=args.device,
-                  autosave_period=None, valid_period=args.valid_period, tb_writer=tboard_writer)
+            train(generator, discriminator, train_dloader, optimizer_gen, optimizer_discr, e, scheduler=scheduler,
+                  device=args.device, autosave_period=None, valid_period=args.valid_period, tb_writer=tboard_writer)
         model_name = "pretrained_models/" + str(generator) + "_completed_" + get_readable_timestamp() + ".pt"
         torch.save(generator.state_dict(), model_name)
         print("Training completed. Final model " + model_name + " has been saved")
