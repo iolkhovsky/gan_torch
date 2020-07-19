@@ -65,34 +65,25 @@ class FacesDataset:
         return "AlignedFaces6k"
 
 
-def make_dataloaders(dataset, train_batch_size=1, val_batch_size=1, validation_split=0.1, shuffle_dataset=True):
+def make_dataloader(dataset, batch_size=1, shuffle_dataset=True):
     random_seed = 42
 
     dataset_size = len(dataset)
     indices = list(range(dataset_size))
-    split = int(np.floor(validation_split * dataset_size))
     if shuffle_dataset:
         np.random.seed(random_seed)
         np.random.shuffle(indices)
-    train_indices, val_indices = indices[split:], indices[:split]
 
-    train_sampler = SubsetRandomSampler(train_indices)
-    valid_sampler = SubsetRandomSampler(val_indices)
-
-    train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=train_batch_size,
-                                                   sampler=train_sampler)
-    validation_dataloader = torch.utils.data.DataLoader(dataset, batch_size=val_batch_size,
-                                                        sampler=valid_sampler)
-    return train_dataloader, validation_dataloader
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+    return dataloader
 
 
 if __name__ == "__main__":
     dataset = FacesDataset("/home/igor/datasets/faces6k/small", target_size=(64, 64),
                            mean=DEFAULT_RGB_MEAN, std=DEFAULT_RGB_STD)
-    train_dloader, val_dloader = make_dataloaders(dataset, 10, 1, 0.0, True)
+    train_dloader = make_dataloader(dataset, 10, True)
     print("Dataset size", len(dataset))
     print("Train", len(train_dloader))
-    print("Val", len(val_dloader))
 
     iterator = iter(train_dloader)
     batch = next(iterator)
