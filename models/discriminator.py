@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.functional import max_pool2d
-from models.layers import ConvX2
+from models.layers import ConvX2, ConvX1
 import unittest
 import numpy as np
 
@@ -10,21 +10,25 @@ class FeatureExtractor(nn.Module):
 
     def __init__(self):
         super(FeatureExtractor, self).__init__()
-        self.conv1 = ConvX2([3, 32, 32])
+        self.conv1 = ConvX1([3, 64])
         self.pool1 = nn.MaxPool2d(2)
-        self.conv2 = ConvX2([32, 64, 64])
+        self.conv2 = ConvX1([64, 128])
         self.pool2 = nn.MaxPool2d(2)
-        self.conv3 = ConvX2([64, 128, 128])
+        self.conv3 = ConvX1([128, 256])
         self.pool3 = nn.MaxPool2d(2)
+        self.conv4 = ConvX1([256, 512])
+        self.pool4 = nn.MaxPool2d(2)
         return
 
     def forward(self, x):
-        x = self.conv1(x)       # 3x64x64 -> 32x60x60
-        x = self.pool1(x)       # 32x60x60 -> 32x30x30
-        x = self.conv2(x)       # 32x30x30 -> 64x26x26
-        x = self.pool2(x)       # 64x26x26 -> 64x13x13
-        x = self.conv3(x)       # 64x13x13 -> 128x9x9
-        x = self.pool3(x)       # 128x9x9 -> 128x4x4
+        x = self.conv1(x)       # 3x64x64 -> 64x64x64
+        x = self.pool1(x)       # 64x64x64 -> 64x32x32
+        x = self.conv2(x)       # 64x32x32 -> 128x32x32
+        x = self.pool2(x)       # 128x32x32 -> 128x16x16
+        x = self.conv3(x)       # 128x16x16 -> 256x16x16
+        x = self.pool3(x)       # 256x16x16 -> 256x8x8
+        x = self.conv4(x)       # 256x8x8 -> 512x8x8
+        x = self.pool4(x)       # 512x8x8 -> 512x4x4
         return x
 
 
@@ -32,20 +36,15 @@ class Classifier(nn.Module):
 
     def __init__(self):
         super(Classifier, self).__init__()
-        self.do1 = torch.nn.Dropout(p=0.5)
-        self.fc1 = nn.Linear(128*4*4, 128)
-        self.bn2 = torch.nn.BatchNorm1d(128)
-        self.do2 = torch.nn.Dropout(p=0.5)
-        self.fc2 = nn.Linear(128, 2)
+        self.do = torch.nn.Dropout(p=0.8)
+        self.fc = nn.Linear(512*4*4, 1)
+        nn.init.normal_(self.fc.weight.data, 0.0, 0.02)
         return
 
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
-        x = self.do1(x)
-        x = self.fc1(x)
-        x = self.bn2(x)
-        x = self.do2(x)
-        x = self.fc2(x)
+        x = self.do(x)
+        x = self.fc(x)
         return x
 
 
@@ -75,7 +74,7 @@ class TestDescriminator(unittest.TestCase):
         model = FaceDiscriminator()
         test_in = torch.from_numpy(np.arange(64*64*3*batch_sz).reshape(batch_sz, 3, 64, 64).astype(np.float32))
         net_out = model.forward(test_in)
-        self.assertEqual(net_out.shape, (batch_sz, 2))
+        self.assertEqual(net_out.shape, (batch_sz, 1))
         return
 
     def test_back_prop(self):
@@ -84,7 +83,7 @@ class TestDescriminator(unittest.TestCase):
 
         input = torch.from_numpy(np.arange(64*64*3*batch_sz).reshape(batch_sz, 3, 64, 64).astype(np.float32))
         out = model.forward(input)
-        target = torch.rand(batch_sz, 2)
+        target = torch.rand(batch_sz, 1)
 
         loss_func = nn.BCELoss()
         loss = loss_func(out, target)

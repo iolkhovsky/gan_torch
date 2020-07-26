@@ -24,7 +24,7 @@ class FacesDataset:
         return encode_img(image, mean=self.mean, std=self.std)
 
     def __init__(self, root=DEFAULT_DSET_PATH, target_size=DEFAULT_TARGET_SIZE,
-                 mean=(0.5, 0.5, 0.5), std=(1.0, 1.0, 1.0)):
+                 mean=(0.5, 0.5, 0.5), std=(1.0, 1.0, 1.0), transform=None):
         assert isdir(root)
 
         self.root = root
@@ -32,6 +32,7 @@ class FacesDataset:
         self.sample_ptr = 0
         self.mean = mean
         self.std = std
+        self.transform = transform
 
         self.img_paths = glob(join(root, "*.jpg"))
 
@@ -45,7 +46,10 @@ class FacesDataset:
         if isinstance(item, slice):
             return [self[i] for i in range(*item.indices(len(self)))]
         elif isinstance(item, int):
-            return self.imgs[item]
+            if self.transform:
+                return self.transform(self.imgs[item])
+            else:
+                return self.imgs[item]
         else:
             raise ValueError("Invalid index(-ices) to __get_item__ method")
 
@@ -63,6 +67,22 @@ class FacesDataset:
 
     def __str__(self):
         return "AlignedFaces6k"
+
+
+class AddGaussianNoise(object):
+
+    def __init__(self, mean=0., std=1.):
+        self.std = std
+        self.mean = mean
+
+    def __call__(self, tensor):
+        if type(tensor) == torch.Tensor:
+            return tensor + torch.randn(tensor.size(), device=tensor.device) * self.std + self.mean
+        elif type(tensor) == np.ndarray:
+            return tensor + np.random.normal(loc=self.mean, scale=self.std, size=tensor.shape).astype(dtype=np.float32)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
 
 def make_dataloader(dataset, batch_size=1, shuffle_dataset=True):

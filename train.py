@@ -10,28 +10,27 @@ from dataset.faces_dataset import make_dataloader
 from torch.optim import Adam, SGD
 from metrics import accuracy
 from dataset.utils import decode_img, array_yxc2cyx
-from dataset.faces_dataset import FacesDataset, DEFAULT_RGB_MEAN, DEFAULT_RGB_STD
+from dataset.faces_dataset import FacesDataset, DEFAULT_RGB_MEAN, DEFAULT_RGB_STD, AddGaussianNoise
 
 from utils import get_readable_timestamp
 
 
 def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr, epoch_id=0, scheduler=None, device="cpu",
-          autosave_period=None, valid_period=None, tb_writer=None):
-
-    generator.train()
-    discriminator.train()
+          autosave_period=None, valid_period=None, tb_writer=None, transform=None):
 
     with tqdm(total=len(train_loader) * train_loader.batch_size,
               desc=f'Epoch {epoch_id + 1}',
               unit='image') as pbar:
         for batch_idx, real_imgs in enumerate(train_loader):
 
+            generator.train()
+            discriminator.train()
+
             optimizer_discr.zero_grad()
             real_imgs = real_imgs.to(device)
             b_size = real_imgs.size(0)
             label = torch.full((b_size,), 1, device=device)
             output = discriminator(real_imgs)
-            output = output[:, 1]
             loss_function = BCELoss(reduction="mean")
             errD_real = loss_function(output, label)
             errD_real.backward()
@@ -40,10 +39,11 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
             random_descriptors = torch.randn(b_size, 64, device=device)
             # Generate fake image batch with G
             fake = generator(random_descriptors)
+            if transform is not None:
+                fake = transform(fake)
             label.fill_(0)
             # Classify all fake batch with D
             output = discriminator(fake.detach())
-            output = output[:, 1]
             # Calculate D's loss on the all-fake batch
             errD_fake = loss_function(output, label)
             # Calculate the gradients for this batch
@@ -54,11 +54,10 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
             # Update D
             optimizer_discr.step()
 
-            generator.zero_grad()
+            optimizer_gen.zero_grad()
             label.fill_(1)  # fake labels are real for generator cost
             # Since we just updated D, perform another forward pass of all-fake batch through D
             output = discriminator(fake)
-            output = output[:, 1]
             # Calculate G's loss based on this output
             errG = loss_function(output, label)
             # Calculate gradients for G
@@ -73,10 +72,15 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
                 tb_writer.add_scalar("Loss/DiscriminatorFake", errD_fake.item(), global_step)
                 tb_writer.add_scalar("Loss/DiscriminatorReal", errD_real.item(), global_step)
                 tb_writer.add_scalar("Loss/Generator", errG.item(), global_step)
+                tb_writer.add_scalar("Loss/Total", errG.item() + errD.item(), global_step)
+                tb_writer.add_scalar("Accuracy/DiscrReal", D_x, global_step)
+                tb_writer.add_scalar("Accuracy/DiscrFake", 1.0 - D_G_z1, global_step)
+                tb_writer.add_scalar("Accuracy/GenFake", D_G_z2, global_step)
 
             if valid_period:
                 if (batch_idx + 1) % valid_period == 0:
                     with torch.no_grad():
+
                         gen_imgs = []
                         for i, img in enumerate(fake):
                             if img.device != "cpu":
@@ -84,9 +88,21 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
                             img = decode_img(img.detach().numpy())
                             img = array_yxc2cyx(img)
                             gen_imgs.append(torch.from_numpy(img))
+
+                        target_imgs = []
+                        for i, img in enumerate(real_imgs[:min(len(real_imgs), 8)]):
+                            if img.device != "cpu":
+                                img = img.cpu()
+                            img = decode_img(img.detach().numpy())
+                            img = array_yxc2cyx(img)
+                            target_imgs.append(torch.from_numpy(img))
+
                         if tb_writer:
                             img_grid_gen = torchvision.utils.make_grid(gen_imgs)
                             tb_writer.add_image('Valid/Generated', img_tensor=img_grid_gen,
+                                                    global_step=global_step, dataformats='CHW')
+                            img_grid_tgt = torchvision.utils.make_grid(target_imgs)
+                            tb_writer.add_image('Valid/Real', img_tensor=img_grid_tgt,
                                                     global_step=global_step, dataformats='CHW')
 
             if autosave_period is not None:
@@ -110,7 +126,7 @@ def parse_args():
                         help="Number of epochs")
     parser.add_argument("--batch-train", type=int, default=32,
                         help="Size of batch for training")
-    parser.add_argument("--device", type=str, default="cpu",
+    parser.add_argument("--device", type=str, default="cuda",
                         help="Target device: cpu/cuda")
     parser.add_argument("--learning-rate", type=float, default=2e-4,
                         help="Learning rate")
@@ -132,6 +148,10 @@ def parse_args():
                         help="Use lr scheduler or not")
     parser.add_argument("--l2", type=float, default=0,
                         help="L2 reularization coefficient")
+    parser.add_argument("--noise-mean", type=float,
+                        help="Gaussian noise mean")
+    parser.add_argument("--noise-std", type=float,
+                        help="Gaussian noise std")
     args = parser.parse_args()
     return args
 
@@ -149,8 +169,11 @@ def main():
     if args.pretrained_disc:
         discriminator.load_state_dict(torch.load(args.pretrained_disc))
 
+    transform = None
+    if (args.noise_mean is not None) and (args.noise_std is not None):
+        transform = AddGaussianNoise(mean=args.noise_mean, std=args.noise_std)
     dataset = FacesDataset("/home/igor/datasets/faces6k/aligned", target_size=(64, 64),
-                           mean=DEFAULT_RGB_MEAN, std=DEFAULT_RGB_STD)
+                           mean=DEFAULT_RGB_MEAN, std=DEFAULT_RGB_STD, transform=transform)
     train_dloader = make_dataloader(dataset, batch_size=args.batch_train, shuffle_dataset=True)
 
     optimizer_gen = None
@@ -176,7 +199,8 @@ def main():
     try:
         for e in range(args.epochs):
             train(generator, discriminator, train_dloader, optimizer_gen, optimizer_discr, e, scheduler=scheduler,
-                  device=args.device, autosave_period=None, valid_period=args.valid_period, tb_writer=tboard_writer)
+                  device=args.device, autosave_period=None, valid_period=args.valid_period, tb_writer=tboard_writer,
+                  transform=transform)
         model_name = "pretrained_models/" + str(generator) + "_completed_" + get_readable_timestamp() + ".pt"
         torch.save(generator.state_dict(), model_name)
         print("Training completed. Final model " + model_name + " has been saved")
