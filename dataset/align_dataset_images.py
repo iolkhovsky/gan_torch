@@ -37,31 +37,38 @@ def main():
     total_imgs = len(img_paths)
     img_idx = 0
     cnt = 0
-    r_sample = []
-    g_sample = []
-    b_sample = []
+    r_acc = 0.
+    r_sq_acc = 0.
+    g_acc = 0.
+    g_sq_acc = 0.
+    b_acc = 0.
+    b_sq_acc = 0.
+    total_pixels = 0
     with tqdm(total=total_imgs, desc=f'Image {img_idx + 1}/{total_imgs}', unit='image') as pbar:
         aligner = FaceAligner(target_size=args.target_image_size, eye_level=args.eye_level, eye_dist=args.eye_dist)
         for img_idx, img_path in enumerate(img_paths):
             try:
                 img = cv2.imread(img_path)
-
                 aligned_img = aligner(img)
                 if aligned_img is not None:
                     cv2.imwrite(join(args.output_folder, ntpath.basename(img_path)), aligned_img)
                     cnt += 1
                     norm_img = np.divide(aligned_img, 255.0)
-                    r_sample += norm_img[:, :, 2].flatten().tolist()
-                    g_sample += norm_img[:, :, 1].flatten().tolist()
-                    b_sample += norm_img[:, :, 0].flatten().tolist()
+                    r_acc += norm_img[:, :, 2].sum()
+                    r_sq_acc += np.power(norm_img[:, :, 2], 2).sum()
+                    g_acc += norm_img[:, :, 1].sum()
+                    g_sq_acc += np.power(norm_img[:, :, 1], 2).sum()
+                    b_acc += norm_img[:, :, 0].sum()
+                    b_sq_acc += np.power(norm_img[:, :, 0], 2).sum()
+                    total_pixels += norm_img.shape[0] * norm_img.shape[1]
             except:
                 print("Exception has been thrown, img idx:", img_idx, "path:", img_path)
                 print("Exception:", sys.exc_info()[0])
             pbar.update(1)
     print("Total images saved:", cnt, "skipped:", total_imgs - cnt)
-    r_mean, r_std = np.mean(r_sample), np.std(r_sample)
-    g_mean, g_std = np.mean(g_sample), np.std(g_sample)
-    b_mean, b_std = np.mean(b_sample), np.std(b_sample)
+    r_mean, r_std = r_acc / total_pixels, np.sqrt(r_sq_acc / total_pixels - np.power(r_acc / total_pixels, 2))
+    g_mean, g_std = g_acc / total_pixels, np.sqrt(g_sq_acc / total_pixels - np.power(g_acc / total_pixels, 2))
+    b_mean, b_std = b_acc / total_pixels, np.sqrt(b_sq_acc / total_pixels - np.power(b_acc / total_pixels, 2))
     text = ""
     with open("dataset_stat.txt", "w") as f:
         text += "Mean (r/g/b): " + str(r_mean) + " " + str(g_mean) + " " + str(b_mean) + "\n"

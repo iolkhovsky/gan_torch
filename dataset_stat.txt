@@ -1,0 +1,6 @@
+Mean (r/g/b): 0.534812022950395 0.4143179997187508 0.3528174872495447
+Std (r/g/b): 0.29074517717464865 0.2538011731959151 0.2433702573454103
+Total images: 192350
+Src dataset path: /home/igor/datasets/align_celeba/img_align_celeba/img_align_celeba
+Preprocessed dataset path: /home/igor/datasets/faces
+Output image size: 64

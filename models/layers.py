@@ -46,20 +46,32 @@ class ConvX1(nn.Module):
 
 class UpSample(nn.Module):
 
-    def __init__(self, channels):
+    def __init__(self, channels, upsample_type="TransposeConv"):
         super(UpSample, self).__init__()
+        self.upsample_type = upsample_type
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv = nn.Conv2d(in_channels=channels[0], out_channels=channels[1], kernel_size=3, padding=1, bias=False)
+        self.transpose_conv = nn.ConvTranspose2d(in_channels=channels[0], out_channels=channels[1], kernel_size=4,
+                                                 stride=2, padding=1, bias=False)
+        self.conv = nn.Conv2d(in_channels=channels[0], out_channels=channels[1], kernel_size=5, stride=1, padding=2,
+                              bias=False)
         self.act = nn.ReLU()
         self.bn = nn.BatchNorm2d(channels[1])
+        nn.init.normal_(self.transpose_conv.weight.data, 0.0, 0.02)
         nn.init.normal_(self.conv.weight.data, 0.0, 0.02)
         nn.init.normal_(self.bn.weight.data, 1.0, 0.02)
         nn.init.constant_(self.bn.bias.data, 0)
         return
 
     def forward(self, x):
-        x = self.upsample(x)
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.act(x)
+        if self.upsample_type == "TransposeConv":
+            x = self.transpose_conv(x)
+            x = self.bn(x)
+            x = self.act(x)
+        elif self.upsample_type == "Resample":
+            x = self.conv(x)
+            x = self.upsample(x)
+            x = self.bn(x)
+            x = self.act(x)
+        else:
+            raise RuntimeError("Unexpected upsample type")
         return x

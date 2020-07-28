@@ -10,13 +10,13 @@ class FeatureExtractor(nn.Module):
 
     def __init__(self):
         super(FeatureExtractor, self).__init__()
-        self.conv1 = ConvX1([3, 32])
+        self.conv1 = ConvX1([3, 64])
         self.pool1 = nn.MaxPool2d(2)
-        self.conv2 = ConvX1([32, 64])
+        self.conv2 = ConvX1([64, 128])
         self.pool2 = nn.MaxPool2d(2)
-        self.conv3 = ConvX1([64, 128])
+        self.conv3 = ConvX1([128, 256])
         self.pool3 = nn.MaxPool2d(2)
-        self.conv4 = ConvX1([128, 256])
+        self.conv4 = ConvX1([256, 512])
         self.pool4 = nn.MaxPool2d(2)
         return
 
@@ -37,7 +37,7 @@ class Classifier(nn.Module):
     def __init__(self):
         super(Classifier, self).__init__()
         self.do = torch.nn.Dropout(p=0.8)
-        self.fc = nn.Linear(256*4*4, 1)
+        self.fc = nn.Linear(128*4*4, 1)
         nn.init.normal_(self.fc.weight.data, 0.0, 0.02)
         return
 
