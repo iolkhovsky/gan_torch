@@ -1,17 +1,16 @@
+import cv2
 import torch
-from torch.nn import BCELoss
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 import argparse
 from tqdm import tqdm
+
 from models.discriminator import FaceDiscriminator
 from models.generator import FaceGenerator
 from dataset.faces_dataset import make_dataloader
 from torch.optim import Adam, SGD
-from metrics import accuracy
 from dataset.utils import decode_img, array_yxc2cyx
 from dataset.faces_dataset import FacesDataset, DEFAULT_RGB_MEAN, DEFAULT_RGB_STD, AddGaussianNoise
-
 from utils import get_readable_timestamp, get_total_elements_cnt
 from loss import discriminator_loss, generator_loss
 
@@ -33,23 +32,30 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
             fake_imgs = generator.forward(random_descriptors)
 
             discriminator.train()
+            discriminator.requires_grad_(True)
             real_probs = discriminator.forward(real_imgs)
-            fake_probs = discriminator.forward(fake_imgs)
+            fake_probs = discriminator.forward(fake_imgs.detach())
             d_loss, loss_real, loss_fake = discriminator_loss(real_prob=real_probs, fake_prob=fake_probs)
             d_loss.backward()
             optimizer_discr.step()
 
-            generator.train()
-            g_loss = generator_loss(fake_prob=fake_probs)
-            g_loss.backward()
-            optimizer_gen.step()
-            for i in range(generator_trains_per_iter - 1):
-                g_loss = generator_loss(fake_prob=fake_probs)
-                g_loss.backward()
-                optimizer_gen.step()
-
             discr_real_accuracy = torch.sum(torch.where(real_probs >= 0.5, 1, 0)) / get_total_elements_cnt(real_probs)
             disc_fake_accuracy = torch.sum(torch.where(fake_probs < 0.5, 0, 1)) / get_total_elements_cnt(fake_probs)
+
+            generator.train()
+            discriminator.eval()
+            discriminator.requires_grad_(False)
+            fake_imgs = generator.forward(random_descriptors)
+            fake_probs = discriminator.forward(fake_imgs)
+            g_loss = generator_loss(fake_prob=fake_probs)
+            g_loss.backward(retain_graph=True)
+            optimizer_gen.step()
+            for i in range(generator_trains_per_iter - 1):
+                fake_imgs = generator.forward(random_descriptors)
+                fake_probs = discriminator.forward(fake_imgs)
+                g_loss = generator_loss(fake_prob=fake_probs)
+                g_loss.backward(retain_graph=True)
+                optimizer_gen.step()
 
             global_step = epoch_id * len(train_loader) + batch_idx
             if tb_writer:
@@ -71,6 +77,7 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
                             if img.device != "cpu":
                                 img = img.cpu()
                             img = decode_img(img.detach().numpy())
+                            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                             img = array_yxc2cyx(img)
                             gen_imgs.append(torch.from_numpy(img))
 
@@ -79,16 +86,17 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
                             if img.device != "cpu":
                                 img = img.cpu()
                             img = decode_img(img.detach().numpy())
+                            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                             img = array_yxc2cyx(img)
                             target_imgs.append(torch.from_numpy(img))
 
                         if tb_writer:
                             img_grid_gen = torchvision.utils.make_grid(gen_imgs)
                             tb_writer.add_image('Valid/Generated', img_tensor=img_grid_gen,
-                                                    global_step=global_step, dataformats='CHW')
+                                                global_step=global_step, dataformats='CHW')
                             img_grid_tgt = torchvision.utils.make_grid(target_imgs)
                             tb_writer.add_image('Valid/Real', img_tensor=img_grid_tgt,
-                                                    global_step=global_step, dataformats='CHW')
+                                                global_step=global_step, dataformats='CHW')
 
             if autosave_period is not None:
                 if (batch_idx + 1) % autosave_period == 0:
@@ -107,11 +115,11 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=1,
+    parser.add_argument("--epochs", type=int, default=2,
                         help="Number of epochs")
     parser.add_argument("--batch-train", type=int, default=32,
                         help="Size of batch for training")
-    parser.add_argument("--device", type=str, default="cuda",
+    parser.add_argument("--device", type=str, default="cpu",
                         help="Target device: cpu/cuda")
     parser.add_argument("--learning-rate", type=float, default=2e-4,
                         help="Learning rate")
@@ -133,12 +141,12 @@ def parse_args():
                         help="Use lr scheduler or not")
     parser.add_argument("--l2", type=float, default=0,
                         help="L2 reularization coefficient")
-    parser.add_argument("--noise-mean", type=float,
+    parser.add_argument("--noise-mean", type=float, default=None,
                         help="Gaussian noise mean")
-    parser.add_argument("--noise-std", type=float,
+    parser.add_argument("--noise-std", type=float, default=None,
                         help="Gaussian noise std")
     parser.add_argument("--dataset", type=str,
-                        default="/home/igor/datasets/faces",
+                        default="/home/igor/datasets/img_celeba/img_align_celeba/small",
                         help="Abs path to dataset")
     args = parser.parse_args()
     return args

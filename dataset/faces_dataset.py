@@ -21,7 +21,7 @@ class FacesDataset:
         resize_image = (image.shape[1], image.shape[0]) != self.output_size
         if resize_image:
             image = cv2.resize(image, self.output_size)
-        return encode_img(image, mean=self.mean, std=self.std)
+        return encode_img(image)
 
     def __init__(self, root=DEFAULT_DSET_PATH, target_size=DEFAULT_TARGET_SIZE,
                  mean=(0.5, 0.5, 0.5), std=(1.0, 1.0, 1.0), transform=None):
