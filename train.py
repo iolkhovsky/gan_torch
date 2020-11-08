@@ -25,7 +25,7 @@ def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr
               desc=f'Epoch {epoch_id + 1}',
               unit='image') as pbar:
         for batch_idx, (real_imgs, labels) in enumerate(train_loader):
-            random_descriptors = torch.randn(real_imgs.size(0), 100, device=device)
+            random_descriptors = torch.rand(real_imgs.size(0), 100, device=device)
 
             d_infos = []
             for d_index in range(d_steps):
