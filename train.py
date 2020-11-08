@@ -4,6 +4,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torchvision
 import argparse
 from tqdm import tqdm
+import numpy as np
 
 from models.discriminator import FaceDiscriminator
 from models.generator import FaceGenerator
@@ -13,79 +14,62 @@ from dataset.utils import decode_img, array_yxc2cyx
 from dataset.faces_dataset import FacesDataset, DEFAULT_RGB_MEAN, DEFAULT_RGB_STD, AddGaussianNoise
 from utils import get_readable_timestamp, get_total_elements_cnt, GrayToRgb
 from loss import discriminator_loss, generator_loss
+from gan_train.utils import d_loop, d_unrolled_loop, g_loop, g_sample
 
 
 def train(generator, discriminator, train_loader, optimizer_gen, optimizer_discr, epoch_id=0,
-          generator_trains_per_iter=2, scheduler=None, device="cpu", autosave_period=None, valid_period=None,
+          g_steps=1, d_steps=1, scheduler=None, device="cpu", autosave_period=None, valid_period=None,
           tb_writer=None, transform=None):
 
     with tqdm(total=len(train_loader) * train_loader.batch_size,
               desc=f'Epoch {epoch_id + 1}',
               unit='image') as pbar:
         for batch_idx, (real_imgs, labels) in enumerate(train_loader):
-
-            optimizer_discr.zero_grad()
-            optimizer_gen.zero_grad()
-            real_imgs = real_imgs.to(device)
             random_descriptors = torch.randn(real_imgs.size(0), 100, device=device)
-            generator.eval()
-            fake_imgs = generator.forward(random_descriptors)
 
-            discriminator.train()
-            discriminator.requires_grad_(True)
-            real_probs = discriminator.forward(real_imgs)
-            fake_probs = discriminator.forward(fake_imgs.detach())
-            d_loss, loss_real, loss_fake = discriminator_loss(real_prob=real_probs, fake_prob=fake_probs)
-            d_loss.backward()
-            optimizer_discr.step()
+            d_infos = []
+            for d_index in range(d_steps):
+                d_info = d_loop(generator=generator, discriminator=discriminator, d_optimizer=optimizer_discr,
+                                real_batch=real_imgs, fake_descriptors=random_descriptors, cuda=device == "cuda")
+                d_infos.append(d_info)
+            d_infos = np.mean(d_infos, 0)
+            d_real_loss, d_fake_loss = d_infos
 
-            discr_real_accuracy = torch.sum(torch.where(real_probs >= 0.5, 1, 0)) / get_total_elements_cnt(real_probs)
-            disc_fake_accuracy = torch.sum(torch.where(fake_probs < 0.5, 0, 1)) / get_total_elements_cnt(fake_probs)
-
-            generator.train()
-            discriminator.eval()
-            discriminator.requires_grad_(False)
-            fake_imgs = generator.forward(random_descriptors)
-            fake_probs = discriminator.forward(fake_imgs)
-            g_loss = generator_loss(fake_prob=fake_probs)
-            g_loss.backward(retain_graph=True)
-            optimizer_gen.step()
-            for i in range(generator_trains_per_iter - 1):
-                fake_imgs = generator.forward(random_descriptors)
-                fake_probs = discriminator.forward(fake_imgs)
-                g_loss = generator_loss(fake_prob=fake_probs)
-                g_loss.backward(retain_graph=True)
-                optimizer_gen.step()
+            g_infos = []
+            for g_index in range(g_steps):
+                g_info = g_loop(generator=generator, discriminator=discriminator, g_optimizer=optimizer_gen,
+                                d_optimizer=optimizer_discr, real_batch=real_imgs, fake_descriptors=random_descriptors,
+                                cuda=device == "cuda")
+                g_infos.append(g_info)
+            g_infos = np.mean(g_infos)
+            g_loss = g_infos
 
             global_step = epoch_id * len(train_loader) + batch_idx
             if tb_writer:
-                tb_writer.add_scalar("Loss/Discriminator", d_loss.item(), global_step)
-                tb_writer.add_scalar("Loss/DiscriminatorFake", loss_fake.item(), global_step)
-                tb_writer.add_scalar("Loss/DiscriminatorReal", loss_real.item(), global_step)
-                tb_writer.add_scalar("Loss/Generator", g_loss.item(), global_step)
-                tb_writer.add_scalar("Loss/Total", d_loss.item() + g_loss.item(), global_step)
-                tb_writer.add_scalar("Accuracy/DiscrReal", discr_real_accuracy.item(), global_step)
-                tb_writer.add_scalar("Accuracy/DiscrFake", disc_fake_accuracy.item(), global_step)
-                tb_writer.add_scalar("Accuracy/GenFake", 1. - disc_fake_accuracy.item(), global_step)
+                tb_writer.add_scalar("Loss/Discriminator", d_real_loss + d_fake_loss, global_step)
+                tb_writer.add_scalar("Loss/DiscriminatorFake", d_fake_loss, global_step)
+                tb_writer.add_scalar("Loss/DiscriminatorReal", d_real_loss, global_step)
+                tb_writer.add_scalar("Loss/Generator", g_loss, global_step)
+                tb_writer.add_scalar("Loss/Total", g_loss + d_fake_loss + d_real_loss, global_step)
+                #tb_writer.add_scalar("Accuracy/DiscrReal", discr_real_accuracy.item(), global_step)
+                #tb_writer.add_scalar("Accuracy/DiscrFake", disc_fake_accuracy.item(), global_step)
+                #tb_writer.add_scalar("Accuracy/GenFake", 1. - disc_fake_accuracy.item(), global_step)
 
             if valid_period:
                 if (batch_idx + 1) % valid_period == 0:
                     with torch.no_grad():
-
+                        fake_imgs = g_sample(generator=generator, fake_descriptors=random_descriptors,
+                                             cuda=device == "cuda")
                         gen_imgs = []
                         for i, img in enumerate(fake_imgs):
-                            if img.device != "cpu":
-                                img = img.cpu()
-                            img = decode_img(img.detach().numpy())
+                            img = decode_img(img)
                             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                             img = array_yxc2cyx(img)
                             gen_imgs.append(torch.from_numpy(img))
 
                         target_imgs = []
                         for i, img in enumerate(real_imgs[:min(len(real_imgs), 8)]):
-                            if img.device != "cpu":
-                                img = img.cpu()
-                            img = decode_img(img.detach().numpy())
+                            img = decode_img(img.numpy())
                             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                             img = array_yxc2cyx(img)
                             target_imgs.append(torch.from_numpy(img))
